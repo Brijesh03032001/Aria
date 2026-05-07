@@ -1,6 +1,6 @@
 # Aria — Voice-First AI Assistant
 
-Built at **TreeHacks 2026**, Aria is an accessibility-focused voice AI designed primarily for blind and visually impaired users. It listens to your voice, reasons about what you need, and acts — browsing the web, controlling your Mac desktop, writing code, or creating notes — all through natural spoken conversation.
+Aria is an accessibility-focused voice AI designed primarily for blind and visually impaired users. It listens to your voice, reasons about what you need, and acts — browsing the web, controlling your Mac desktop, writing code, or creating notes — all through natural spoken conversation.
 
 ---
 
@@ -137,8 +137,3 @@ cd agentverse && pip install -r requirements.txt && python register.py
 **Data**: Elasticsearch  
 **Other**: Python, uAgents (Fetch.ai AgentVerse)
 
----
-
-## Hackathon
-
-Built at **TreeHacks 2026** — Stanford University's annual hackathon.
