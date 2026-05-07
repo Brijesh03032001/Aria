@@ -1,5 +1,7 @@
 # Aria — Voice-First AI Assistant
 
+![Aria Banner](banner/image.png)
+
 Aria is an accessibility-focused voice AI designed primarily for blind and visually impaired users. It listens to your voice, reasons about what you need, and acts — browsing the web, controlling your Mac desktop, writing code, or creating notes — all through natural spoken conversation.
 
 ---
