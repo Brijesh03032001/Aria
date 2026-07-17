@@ -1,8 +1,8 @@
-import { ChatOpenAI } from "@langchain/openai";
 import { ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { createBrowserTools, createKnowledgeTools, createSearchTools } from "./tools.js";
+import { buildAgentModel } from "./modelFactory.js";
 import type {
   ConversationTurn,
   UserProfile,
@@ -55,7 +55,8 @@ VOICE RULES:
 - Lead with the most important information.
 - After describing content, ask what the user wants to do next.
 - For articles: give a 2-3 sentence summary first, then offer to read more.
-- No markdown, no URLs, no bullet points.`;
+- No markdown, no URLs, no bullet points.
+- If a tool result has needsConfirmation: true, STOP immediately — do not call the tool again. Speak the message field back to the user verbatim as your response and wait for their yes or no.`;
 
   if (profile) {
     prompt += `\n\nUser: ${profile.name}.`;
@@ -102,11 +103,7 @@ export function createGeneralAgent(
   executionContext: ExecutionContext | null,
   kb: KnowledgeBase | null = null,
 ) {
-  const agentModel = new ChatOpenAI({
-    model: "gpt-4.1",
-    temperature: 0.3,
-    maxTokens: 1024,
-  });
+  const agentModel = buildAgentModel({ temperature: 0.3, maxTokens: 1024 });
 
   return async function generalAgent(state: {
     userInput: string;
@@ -114,6 +111,7 @@ export function createGeneralAgent(
     userProfile: UserProfile | null;
     pageSnapshot: PageSnapshot | null;
     memoryContext?: string;
+    ethicsBypass?: boolean;
   }, interimSpeech?: InterimSpeechCallback, abortSignal?: AbortSignal, sessionId?: string, memoryContext?: string): Promise<{ responseText: string }> {
     const systemPrompt = buildSystemPrompt(state.userProfile, state.pageSnapshot, memoryContext || state.memoryContext);
 
@@ -135,7 +133,11 @@ export function createGeneralAgent(
     }
 
     // Full ReAct loop with browser tools + knowledge tools + web search
-    const browserTools = createBrowserTools(executionContext);
+    const browserTools = createBrowserTools(executionContext, {
+      sessionId,
+      ethicsBypass: state.ethicsBypass,
+      kb,
+    });
     const knowledgeTools = createKnowledgeTools(kb, sessionId);
     const searchTools = createSearchTools();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
