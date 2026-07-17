@@ -1,13 +1,14 @@
-import { ChatOpenAI } from "@langchain/openai";
 import { ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { createCodingTools, createSearchTools } from "./tools.js";
+import { buildAgentModel } from "./modelFactory.js";
 import type {
   ConversationTurn,
   UserProfile,
   PageSnapshot,
   InterimSpeechCallback,
+  KnowledgeBase,
 } from "../types/index.js";
 
 const MAX_TOOL_STEPS = 10;
@@ -46,7 +47,8 @@ VOICE RULES:
 - Describe file paths naturally: "in the utils file" or "in the agents folder" not "src/utils.ts"
 - No markdown, no code blocks, no backticks. Speak naturally.
 - Keep responses under 3 sentences unless the user asks for detail.
-- When reading code aloud, describe what it does rather than reading syntax literally.`;
+- When reading code aloud, describe what it does rather than reading syntax literally.
+- If a tool result has needsConfirmation: true, STOP immediately — do not call the tool again. Speak the message field back to the user verbatim as your response and wait for their yes or no.`;
 
   if (memoryContext) {
     prompt += `\n\nRELEVANT MEMORY FROM PREVIOUS INTERACTIONS:\n${memoryContext}`;
@@ -86,12 +88,8 @@ function getCodingInterimPhrase(toolName: string, args: Record<string, unknown>)
 /**
  * Creates a coding agent node function that uses file/shell tools via ReAct loop.
  */
-export function createCodingAgent(workspacePath: string) {
-  const agentModel = new ChatOpenAI({
-    model: "gpt-4.1",
-    temperature: 0.3,
-    maxTokens: 1024,
-  });
+export function createCodingAgent(workspacePath: string, kb: KnowledgeBase | null = null) {
+  const agentModel = buildAgentModel({ temperature: 0.3, maxTokens: 1024 });
 
   return async function codingAgent(state: {
     userInput: string;
@@ -99,7 +97,8 @@ export function createCodingAgent(workspacePath: string) {
     userProfile: UserProfile | null;
     pageSnapshot: PageSnapshot | null;
     memoryContext?: string;
-  }, interimSpeech?: InterimSpeechCallback, abortSignal?: AbortSignal, _sessionId?: string, memoryContext?: string): Promise<{ responseText: string }> {
+    ethicsBypass?: boolean;
+  }, interimSpeech?: InterimSpeechCallback, abortSignal?: AbortSignal, sessionId?: string, memoryContext?: string): Promise<{ responseText: string }> {
     const systemPrompt = buildCodingSystemPrompt(memoryContext || state.memoryContext);
 
     const history: BaseMessage[] = state.conversationHistory
@@ -110,7 +109,11 @@ export function createCodingAgent(workspacePath: string) {
       })) as unknown as BaseMessage[];
 
     // Full ReAct loop with coding tools + web search
-    const codingTools = createCodingTools(workspacePath);
+    const codingTools = createCodingTools(workspacePath, {
+      sessionId,
+      ethicsBypass: state.ethicsBypass,
+      kb,
+    });
     const searchTools = createSearchTools();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tools: DynamicStructuredTool<any>[] = [...codingTools, ...searchTools];
