@@ -125,6 +125,25 @@ export interface ProductViewed {
   timestamp: string;
 }
 
+// ── Audit Log Types ──────────────────────────────────────────
+
+export type AgentActionVerdict =
+  | "routed"           // supervisor dispatched a turn to an agent
+  | "confirm_required" // ethics gate paused an irreversible/risky action
+  | "resumed"          // user said yes — gated action re-attempted
+  | "cancelled"        // user said no — gated action dropped
+  | "reask";           // ambiguous reply — re-asked, confirmation still pending
+
+export interface AgentActionEntry {
+  sessionId: string;
+  timestamp: string;
+  agentCategory: AgentCategory | string;
+  subIntent?: string;
+  action: string; // human-readable: what was requested/attempted
+  verdict: AgentActionVerdict;
+  reason?: string | null;
+}
+
 export interface KnowledgeBase {
   getProfile(sessionId: string): Promise<UserProfile | null>;
   updatePreference(sessionId: string, key: string, value: string): Promise<void>;
@@ -136,5 +155,7 @@ export interface KnowledgeBase {
   indexConversation(entry: ConversationEntry): Promise<void>;
   searchConversationHistory(query: string, sessionId?: string, limit?: number): Promise<ConversationEntry[]>;
   restoreConversation(sessionId: string, limit?: number): Promise<ConversationEntry[]>;
+  indexAgentAction(entry: AgentActionEntry): Promise<void>;
+  getAgentActions(sessionId: string, limit?: number): Promise<AgentActionEntry[]>;
   isAvailable(): boolean;
 }

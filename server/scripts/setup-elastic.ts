@@ -8,7 +8,9 @@
  * 3. products-viewed index (semantic_text content field)
  * 4. user-profile index (structured mappings)
  * 5. drug-safety-pipeline (flags drug interaction keywords)
- * 6. Agent Builder agent via Kibana API (if KIBANA_URL set)
+ * 6. conversation-history index (semantic_text text field)
+ * 7. agent-actions index (ethics-gate + routing audit log)
+ * 8. Agent Builder agent via Kibana API (if KIBANA_URL set)
  */
 
 import "dotenv/config";
@@ -231,9 +233,36 @@ async function setup() {
     }
   }
 
-  // ── 7. Agent Builder agent (Kibana) ────────────────────────
+  // ── 7. agent-actions index (audit log) ─────────────────────
+  console.log("\n7. Creating agent-actions index...");
+  try {
+    await client.indices.create({
+      index: "agent-actions",
+      mappings: {
+        properties: {
+          sessionId: { type: "keyword" },
+          agentCategory: { type: "keyword" },
+          subIntent: { type: "keyword" },
+          action: { type: "text" },
+          verdict: { type: "keyword" },
+          reason: { type: "text" },
+          timestamp: { type: "date" },
+        },
+      },
+    });
+    console.log("   agent-actions index created.");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("already exists") || msg.includes("resource_already_exists")) {
+      console.log("   agent-actions index already exists — skipping.");
+    } else {
+      console.warn("   Warning:", msg);
+    }
+  }
+
+  // ── 8. Agent Builder agent (Kibana) ────────────────────────
   if (kibanaUrl) {
-    console.log("\n6. Creating Agent Builder agent in Kibana...");
+    console.log("\n8. Creating Agent Builder agent in Kibana...");
     try {
       const response = await fetch(`${kibanaUrl}/api/security_ai_assistant/knowledge_base/entries/_bulk_action`, {
         method: "POST",

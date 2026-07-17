@@ -83,6 +83,17 @@ async function start() {
     res.json({ status: "ok" });
   });
 
+  // Audit log — every agent routing decision + ethics-gate confirm/resume/cancel event
+  app.get("/api/audit/:sessionId", async (req, res) => {
+    if (!knowledgeBase?.isAvailable()) {
+      res.json({ available: false, entries: [] });
+      return;
+    }
+    const limit = Math.min(parseInt(String(req.query.limit ?? "50"), 10) || 50, 200);
+    const entries = await knowledgeBase.getAgentActions(req.params.sessionId, limit);
+    res.json({ available: true, entries });
+  });
+
   // Supervisor graph for REST API (text-only, no browser tools)
   const chatGraph = createSupervisor(null, knowledgeBase);
 

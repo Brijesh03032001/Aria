@@ -8,6 +8,7 @@ import type {
   PageVisit,
   ProductViewed,
   ConversationEntry,
+  AgentActionEntry,
   KnowledgeBase,
 } from "../types/index.js";
 
@@ -369,6 +370,48 @@ export function createKnowledgeBase(): KnowledgeBase {
           (hit) => hit._source as unknown as ConversationEntry,
         );
         console.log(`[Elasticsearch] restoreConversation results=${hits.length}`);
+        return hits;
+      } catch {
+        return [];
+      }
+    },
+
+    async indexAgentAction(entry: AgentActionEntry): Promise<void> {
+      if (!client) return;
+
+      console.log(
+        `[Elasticsearch] indexAgentAction agent=${entry.agentCategory} verdict=${entry.verdict}` +
+          (entry.reason ? ` reason="${entry.reason}"` : ""),
+      );
+      try {
+        await client.index({
+          index: "agent-actions",
+          document: entry,
+        });
+      } catch {
+        // fire-and-forget
+      }
+    },
+
+    async getAgentActions(
+      sessionId: string,
+      limit = 50,
+    ): Promise<AgentActionEntry[]> {
+      if (!client) return [];
+
+      console.log(`[Elasticsearch] getAgentActions sessionId=${sessionId} limit=${limit}`);
+      try {
+        const result = await client.search({
+          index: "agent-actions",
+          query: { term: { sessionId } },
+          sort: [{ timestamp: { order: "desc" } }],
+          size: limit,
+        });
+
+        const hits = result.hits.hits.map(
+          (hit) => hit._source as unknown as AgentActionEntry,
+        );
+        console.log(`[Elasticsearch] getAgentActions results=${hits.length}`);
         return hits;
       } catch {
         return [];
