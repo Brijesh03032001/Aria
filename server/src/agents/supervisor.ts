@@ -6,6 +6,12 @@ import { createCodingAgent } from "./coding.js";
 import { createGeneralAgent } from "./general.js";
 import { createDesktopAgent } from "./desktop.js";
 import { createDocumentationAgent } from "./documentation.js";
+import {
+  getPendingConfirmation,
+  clearConfirmation,
+  isAffirmative,
+  isNegative,
+} from "../lib/confirmations.js";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type {
   ConversationTurn,
@@ -66,6 +72,14 @@ const SupervisorState = Annotation.Root({
     reducer: (_prev: string, next: string) => next,
     default: () => "",
   }),
+  ethicsBypass: Annotation<boolean>({
+    reducer: (_prev: boolean, next: boolean) => next,
+    default: () => false,
+  }),
+  confirmationRoute: Annotation<"classify" | "resume" | "cancelled" | "reask">({
+    reducer: (_prev, next) => next,
+    default: () => "classify",
+  }),
 });
 
 type SupervisorStateType = typeof SupervisorState.State;
@@ -76,6 +90,7 @@ type SupervisorStateType = typeof SupervisorState.State;
 
 function buildClassifierModel() {
   const ollamaModel = process.env.OLLAMA_MODEL;
+  const runwareKey = process.env.RUNWARE_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
 
@@ -88,6 +103,19 @@ function buildClassifierModel() {
       configuration: {
         baseURL: process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
         apiKey: "ollama",
+      },
+    });
+  }
+
+  if (runwareKey) {
+    console.log("[supervisor] Classifier using Runware (Gemini Flash)");
+    return new ChatOpenAI({
+      model: "google:gemini@3.5-flash",
+      temperature: 0,
+      maxTokens: 256,
+      configuration: {
+        baseURL: "https://api.runware.ai/v1",
+        apiKey: runwareKey,
       },
     });
   }
@@ -154,7 +182,7 @@ Only return the JSON. No explanation.`;
 
 // ── Node 3: Format for voice ────────────────────────────────
 
-function formatResponse(
+export function formatResponse(
   state: SupervisorStateType,
 ): Partial<SupervisorStateType> {
   let text = state.responseText;
@@ -180,9 +208,92 @@ function formatResponse(
   return { responseText: text };
 }
 
+// ── Confirmation Check (runs before classify) ───────────────
+// If an earlier turn is waiting on a spoken yes/no (ethics gate), resolve
+// it here instead of re-classifying "yes" as an unrelated new request.
+
+export async function checkConfirmation(
+  state: SupervisorStateType,
+  config: RunnableConfig | undefined,
+  kb: KnowledgeBase | null,
+): Promise<Partial<SupervisorStateType>> {
+  const sessionId = (config?.configurable?.sessionId as string) ?? undefined;
+  if (!sessionId) return { confirmationRoute: "classify" };
+
+  const pending = getPendingConfirmation(sessionId);
+  if (!pending) return { confirmationRoute: "classify" };
+
+  if (isAffirmative(state.userInput)) {
+    clearConfirmation(sessionId);
+    console.log(
+      `[supervisor] confirmation YES → resuming ${pending.agentCategory}: "${pending.resumeInstruction}"`,
+    );
+    kb?.indexAgentAction({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      agentCategory: pending.agentCategory,
+      action: pending.resumeInstruction.slice(0, 500),
+      verdict: "resumed",
+      reason: pending.description,
+    }).catch(() => {});
+    return {
+      confirmationRoute: "resume",
+      agentCategory: pending.agentCategory,
+      ethicsBypass: true,
+      scopedInput: `The user confirmed. Proceed now with exactly this action: ${pending.resumeInstruction}`,
+      classification: {
+        category: pending.agentCategory,
+        subIntent: "confirmed_resume",
+        entities: {},
+      },
+    };
+  }
+
+  if (isNegative(state.userInput)) {
+    clearConfirmation(sessionId);
+    console.log(`[supervisor] confirmation NO → cancelling ${pending.agentCategory} action`);
+    kb?.indexAgentAction({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      agentCategory: pending.agentCategory,
+      action: pending.resumeInstruction.slice(0, 500),
+      verdict: "cancelled",
+      reason: pending.description,
+    }).catch(() => {});
+    return {
+      confirmationRoute: "cancelled",
+      responseText: "Okay, I've cancelled that. Anything else I can help with?",
+    };
+  }
+
+  // Ambiguous reply — re-ask, keep the pending confirmation alive
+  kb?.indexAgentAction({
+    sessionId,
+    timestamp: new Date().toISOString(),
+    agentCategory: pending.agentCategory,
+    action: pending.resumeInstruction.slice(0, 500),
+    verdict: "reask",
+    reason: pending.description,
+  }).catch(() => {});
+  return {
+    confirmationRoute: "reask",
+    responseText: `${pending.description} Please say yes or no.`,
+  };
+}
+
+export function confirmationRouter(
+  state: SupervisorStateType,
+): "classify" | "commerceAgent" | "codingAgent" | "generalAgent" | "desktopAgent" | "documentationAgent" | "formatResponse" {
+  if (state.confirmationRoute === "resume") return routeByCategory(state);
+  if (state.confirmationRoute === "cancelled" || state.confirmationRoute === "reask") {
+    return "formatResponse";
+  }
+  return "classify";
+}
+
 // ── Router (3-way) ──────────────────────────────────────────
 
-function routeByCategory(
+export function routeByCategory(
   state: SupervisorStateType,
 ): "commerceAgent" | "codingAgent" | "generalAgent" | "desktopAgent" | "documentationAgent" {
   switch (state.agentCategory) {
@@ -201,7 +312,7 @@ function routeByCategory(
 
 // ── Recheck Node (compound task chaining) ───────────────────
 
-function recheckNode(
+export function recheckNode(
   state: SupervisorStateType,
 ): Partial<SupervisorStateType> {
   if (
@@ -220,7 +331,7 @@ function recheckNode(
   return { agentPhase: 2 };
 }
 
-function recheckRouter(
+export function recheckRouter(
   state: SupervisorStateType,
 ): "commerceAgent" | "codingAgent" | "generalAgent" | "desktopAgent" | "documentationAgent" | "formatResponse" {
   if (state.agentPhase === 1) {
@@ -300,6 +411,18 @@ export function createSupervisor(
       console.log(`[supervisor] memory context: ${memoryContext.slice(0, 100)}...`);
     }
 
+    if (sessionId) {
+      kb?.indexAgentAction({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        agentCategory: classification.category,
+        subIntent: classification.subIntent,
+        action: state.userInput.slice(0, 500),
+        verdict: "routed",
+        reason: null,
+      }).catch(() => {});
+    }
+
     return {
       classification,
       agentCategory: classification.category,
@@ -310,12 +433,19 @@ export function createSupervisor(
     };
   }
 
+  async function checkConfirmationNode(
+    state: SupervisorStateType,
+    config?: RunnableConfig,
+  ): Promise<Partial<SupervisorStateType>> {
+    return checkConfirmation(state, config, kb);
+  }
+
   // Create agent node functions with access to browser tools + knowledge base
   const commerceAgentFn = createCommerceAgent(executionContext, kb);
-  const codingAgentFn = createCodingAgent(workspacePath);
+  const codingAgentFn = createCodingAgent(workspacePath, kb);
   const generalAgentFn = createGeneralAgent(executionContext, kb);
-  const desktopAgentFn = createDesktopAgent();
-  const documentationAgentFn = createDocumentationAgent();
+  const desktopAgentFn = createDesktopAgent(kb);
+  const documentationAgentFn = createDocumentationAgent(kb);
 
   // Build a scoped state for agents in compound tasks.
   // Overrides userInput AND classification.subIntent so agents only see their portion.
@@ -399,6 +529,7 @@ export function createSupervisor(
 
   const graph = new StateGraph(SupervisorState)
     .addNode("classify", classify)
+    .addNode("checkConfirmation", checkConfirmationNode)
     .addNode("commerceAgent", commerceNode)
     .addNode("codingAgent", codingNode)
     .addNode("generalAgent", generalNode)
@@ -406,7 +537,8 @@ export function createSupervisor(
     .addNode("documentationAgent", documentationNode)
     .addNode("recheck", recheckNode)
     .addNode("formatResponse", formatResponse)
-    .addEdge("__start__", "classify")
+    .addEdge("__start__", "checkConfirmation")
+    .addConditionalEdges("checkConfirmation", confirmationRouter)
     .addConditionalEdges("classify", routeByCategory)
     .addEdge("commerceAgent", "recheck")
     .addEdge("codingAgent", "recheck")
