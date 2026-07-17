@@ -5,8 +5,61 @@ import { promisify } from "node:util";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ExecutionContext, KnowledgeBase } from "../types/index.js";
+import { checkEthics } from "../lib/ethicsRules.js";
+import { requestConfirmation } from "../lib/confirmations.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Shared gate glue: run the pure ethics check, and if it comes back
+ * "confirm", stash the pending action for this session and hand the tool
+ * caller (the agent's LLM) a blocked result instead of executing.
+ * Returns null when the caller should proceed normally.
+ */
+function gateOrBlock(opts: {
+  sessionId?: string;
+  agentCategory: "commerce" | "coding";
+  toolName: string;
+  args: Record<string, unknown>;
+  resumeInstruction: string;
+  bypass?: boolean;
+  budgetRemaining?: number | null;
+  kb?: KnowledgeBase | null;
+}): string | null {
+  if (opts.bypass) return null;
+
+  const check = checkEthics({
+    agentCategory: opts.agentCategory,
+    toolName: opts.toolName,
+    args: opts.args,
+    budgetRemaining: opts.budgetRemaining ?? null,
+  });
+
+  if (check.verdict === "allow") return null;
+
+  if (opts.sessionId) {
+    requestConfirmation(opts.sessionId, {
+      agentCategory: opts.agentCategory,
+      description: check.reason ?? "Confirm this action?",
+      resumeInstruction: opts.resumeInstruction,
+    });
+
+    opts.kb?.indexAgentAction({
+      sessionId: opts.sessionId,
+      timestamp: new Date().toISOString(),
+      agentCategory: opts.agentCategory,
+      action: `${opts.toolName}: ${opts.resumeInstruction}`.slice(0, 500),
+      verdict: "confirm_required",
+      reason: check.reason,
+    }).catch(() => {});
+  }
+
+  return JSON.stringify({
+    success: false,
+    needsConfirmation: true,
+    message: check.reason,
+  });
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -144,7 +197,15 @@ export function createSearchTools(): DynamicStructuredTool[] {
  *
  * Note: func casts input to `any` to work around zod v4 / @langchain/core type mismatch.
  */
-export function createBrowserTools(ctx: ExecutionContext) {
+export function createBrowserTools(
+  ctx: ExecutionContext,
+  opts: {
+    sessionId?: string;
+    ethicsBypass?: boolean;
+    budgetRemaining?: number | null;
+    kb?: KnowledgeBase | null;
+  } = {},
+) {
   const navigateToUrl = new DynamicStructuredTool({
     name: "navigate_to_url",
     description:
@@ -170,6 +231,18 @@ export function createBrowserTools(ctx: ExecutionContext) {
         ),
     }),
     func: async (input: any) => {
+      const blocked = gateOrBlock({
+        sessionId: opts.sessionId,
+        agentCategory: "commerce",
+        toolName: "click_element",
+        args: { instruction: input.instruction },
+        resumeInstruction: input.instruction,
+        bypass: opts.ethicsBypass,
+        budgetRemaining: opts.budgetRemaining,
+        kb: opts.kb,
+      });
+      if (blocked) return blocked;
+
       // Observe before act — caches element location for faster, more reliable action
       const observed = await ctx.observe(input.instruction);
       if (observed.success) {
@@ -336,7 +409,10 @@ function resolveSafe(workspacePath: string, filePath: string): string {
  * Create LangChain tools for file I/O and shell commands.
  * All file operations are sandboxed to the workspace directory.
  */
-export function createCodingTools(workspacePath: string): DynamicStructuredTool[] {
+export function createCodingTools(
+  workspacePath: string,
+  opts: { sessionId?: string; ethicsBypass?: boolean; kb?: KnowledgeBase | null } = {},
+): DynamicStructuredTool[] {
   const readFile = new DynamicStructuredTool({
     name: "read_file",
     description:
@@ -438,6 +514,17 @@ export function createCodingTools(workspacePath: string): DynamicStructuredTool[
       cwd: z.string().optional().describe("Working directory relative to workspace root. Defaults to workspace root."),
     }),
     func: async (input: any) => {
+      const blocked = gateOrBlock({
+        sessionId: opts.sessionId,
+        agentCategory: "coding",
+        toolName: "run_command",
+        args: { command: input.command },
+        resumeInstruction: input.command,
+        bypass: opts.ethicsBypass,
+        kb: opts.kb,
+      });
+      if (blocked) return blocked;
+
       try {
         const cwd = input.cwd
           ? resolveSafe(workspacePath, input.cwd)
