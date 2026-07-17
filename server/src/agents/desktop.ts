@@ -3,11 +3,14 @@ import {
   createMacOSControl,
   type ComputerControl,
 } from "../lib/computerControl.js";
+import { checkEthics } from "../lib/ethicsRules.js";
+import { requestConfirmation } from "../lib/confirmations.js";
 import type {
   ConversationTurn,
   UserProfile,
   PageSnapshot,
   InterimSpeechCallback,
+  KnowledgeBase,
 } from "../types/index.js";
 
 const MAX_ITERATIONS = 15;
@@ -38,7 +41,8 @@ RULES:
 - Be concise — 1-2 sentences per action unless the user asks for detail.
 - No markdown, no bullet points. Speak naturally as if guiding a blind user.
 - When you finish the task, summarize what you did clearly.
-- If something fails or you can't find what you're looking for, say so honestly.`;
+- If something fails or you can't find what you're looking for, say so honestly.
+- If a tool result starts with "NEEDS_CONFIRMATION:", STOP immediately — do not repeat the action. Speak the rest of that message to the user verbatim as your response and wait for their yes or no.`;
 
 const CODING_DESKTOP_PROMPT = `You are a coding assistant that controls the desktop for a blind developer.
 You can see the screen and control VS Code, Terminal, and other development tools.
@@ -106,7 +110,7 @@ function isCodingIntent(subIntent: string): boolean {
  * Creates a desktop agent that uses Anthropic's computer-use beta API
  * to control the macOS desktop via screenshot + mouse/keyboard actions.
  */
-export function createDesktopAgent() {
+export function createDesktopAgent(kb: KnowledgeBase | null = null) {
   const anthropic = new Anthropic();
   const computerControl: ComputerControl = createMacOSControl();
 
@@ -117,9 +121,11 @@ export function createDesktopAgent() {
       classification: { subIntent: string } | null;
       userProfile: UserProfile | null;
       pageSnapshot: PageSnapshot | null;
+      ethicsBypass?: boolean;
     },
     interimSpeech?: InterimSpeechCallback,
     abortSignal?: AbortSignal,
+    sessionId?: string,
   ): Promise<{ responseText: string }> {
     const subIntent = state.classification?.subIntent ?? "";
     const systemPrompt = isCodingIntent(subIntent)
@@ -219,6 +225,7 @@ export function createDesktopAgent() {
           const result = await executeComputerAction(
             computerControl,
             input,
+            { sessionId, bypass: state.ethicsBypass, kb },
           );
           toolResults.push({
             type: "tool_result",
@@ -259,6 +266,7 @@ export function createDesktopAgent() {
 async function executeComputerAction(
   control: ComputerControl,
   input: Record<string, unknown>,
+  gate: { sessionId?: string; bypass?: boolean; kb?: KnowledgeBase | null } = {},
 ): Promise<Anthropic.Beta.BetaToolResultBlockParam["content"]> {
   const action = input.action as string;
   const coordinate = input.coordinate as [number, number] | undefined;
@@ -314,6 +322,27 @@ async function executeComputerAction(
     case "type": {
       const text = input.text as string;
       if (!text) throw new Error("type requires text");
+      if (!gate.bypass) {
+        const check = checkEthics({ agentCategory: "desktop", toolName: "type", args: { text } });
+        if (check.verdict === "confirm") {
+          if (gate.sessionId) {
+            requestConfirmation(gate.sessionId, {
+              agentCategory: "desktop",
+              description: check.reason ?? "Confirm this action?",
+              resumeInstruction: text,
+            });
+            gate.kb?.indexAgentAction({
+              sessionId: gate.sessionId,
+              timestamp: new Date().toISOString(),
+              agentCategory: "desktop",
+              action: "type: [redacted — flagged as sensitive]",
+              verdict: "confirm_required",
+              reason: check.reason,
+            }).catch(() => {});
+          }
+          return [{ type: "text", text: `NEEDS_CONFIRMATION: ${check.reason}` }];
+        }
+      }
       await control.type(text);
       return [{ type: "text", text: "Typed." }];
     }
