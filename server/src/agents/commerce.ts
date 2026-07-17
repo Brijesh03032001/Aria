@@ -1,8 +1,8 @@
-import { ChatOpenAI } from "@langchain/openai";
 import { ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { createBrowserTools, createKnowledgeTools, createSearchTools } from "./tools.js";
+import { buildAgentModel } from "./modelFactory.js";
 import type {
   ConversationTurn,
   UserProfile,
@@ -43,7 +43,8 @@ RULES:
 - After presenting options, ask what the user wants to do next.
 - Keep responses under 3 sentences unless asked for details.
 - Speak naturally — no markdown, no URLs, no bullet points.
-- Numbers as words when spoken: "forty-nine ninety-nine" not "$49.99".`;
+- Numbers as words when spoken: "forty-nine ninety-nine" not "$49.99".
+- If a tool result has needsConfirmation: true, STOP immediately — do not call the tool again. Speak the message field back to the user verbatim as your response and wait for their yes or no.`;
 
   if (profile) {
     prompt += `\n\nUser: ${profile.name}. Budget: $${profile.preferences.budget} ${profile.preferences.currency}. Preferred stores: ${profile.preferences.preferredStores}.`;
@@ -92,11 +93,7 @@ export function createCommerceAgent(
   executionContext: ExecutionContext | null,
   kb: KnowledgeBase | null = null,
 ) {
-  const agentModel = new ChatOpenAI({
-    model: "gpt-4.1",
-    temperature: 0.3,
-    maxTokens: 1024,
-  });
+  const agentModel = buildAgentModel({ temperature: 0.3, maxTokens: 1024 });
 
   return async function commerceAgent(state: {
     userInput: string;
@@ -104,6 +101,7 @@ export function createCommerceAgent(
     userProfile: UserProfile | null;
     pageSnapshot: PageSnapshot | null;
     memoryContext?: string;
+    ethicsBypass?: boolean;
   }, interimSpeech?: InterimSpeechCallback, abortSignal?: AbortSignal, sessionId?: string, memoryContext?: string): Promise<{ responseText: string }> {
     const systemPrompt = buildSystemPrompt(state.userProfile, state.pageSnapshot, memoryContext || state.memoryContext);
 
@@ -125,7 +123,11 @@ export function createCommerceAgent(
     }
 
     // Full ReAct loop with browser tools + knowledge tools + web search
-    const browserTools = createBrowserTools(executionContext);
+    const browserTools = createBrowserTools(executionContext, {
+      sessionId,
+      ethicsBypass: state.ethicsBypass,
+      kb,
+    });
     const knowledgeTools = createKnowledgeTools(kb, sessionId);
     const searchTools = createSearchTools();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
