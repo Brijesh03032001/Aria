@@ -1,185 +1,130 @@
-# Aria — Voice-First AI Assistant
+# Aria — Voice-First Agentic Desktop Assistant
 
 ![Aria Banner](banner/image.png)
 
-Aria is an accessibility-focused voice AI designed primarily for blind and visually impaired users. It listens to your voice, reasons about what you need, and acts — browsing the web, controlling your Mac desktop, writing code, or creating notes — all through natural spoken conversation.
+> An accessibility-first voice AI built for blind and visually impaired users. You speak; Aria reasons about what you need and acts — browsing the web, controlling your Mac, writing code, or taking notes — in one continuous spoken conversation.
+
+[![Electron](https://img.shields.io/badge/Electron-desktop-47848F?logo=electron&logoColor=white)](https://electronjs.org)
+[![LangGraph](https://img.shields.io/badge/LangGraph-supervisor-FF6F00)](https://langchain-ai.github.io/langgraph/)
+[![Deepgram](https://img.shields.io/badge/Deepgram-nova--3%20STT-13EF93?logo=deepgram&logoColor=black)](https://deepgram.com)
+[![Cartesia](https://img.shields.io/badge/Cartesia-streaming%20TTS-7C3AED)](https://cartesia.ai)
+[![Anthropic](https://img.shields.io/badge/Anthropic-Claude-D97757?logo=anthropic&logoColor=white)](https://anthropic.com)
 
 ---
 
-## What It Does
+## Highlights
 
-Aria is a full-duplex voice agent. You speak, it transcribes your speech in real time, routes your intent to the best specialized AI agent, and speaks back a natural response — all with sub-second latency.
-
-For risky actions, Aria now uses a spoken confirmation gate. Destructive shell commands, checkout/payment actions, and typed text containing likely PII are paused until the user says yes or no, and those routing/confirmation events can be audited per session.
-
-### Specialized Agents
-
-| Agent | What it does |
-|---|---|
-| **Commerce** | Browses the web, searches for products, compares prices and ratings, and can add items to cart and check out on real e-commerce sites |
-| **General** | Navigates any website, reads and summarizes articles, answers factual questions, searches the web |
-| **Coding** | Reads, writes, and edits files; runs shell commands; debugs errors; searches the codebase — full developer assistant by voice |
-| **Desktop** | Controls your Mac via screenshots + mouse/keyboard using Anthropic's computer-use API — opens apps, clicks buttons, navigates UIs |
-| **Documentation** | Creates notes in Apple Notes by controlling the macOS desktop — dictate, it types |
-
-A **LangGraph supervisor** classifies every voice request and routes it to the right agent automatically.
+- Orchestrated **5 specialized agents** for shopping, coding, browsing, desktop control, and notes through a **LangGraph supervisor** in a full-duplex Electron voice assistant, combining Deepgram transcription and Cartesia speech streaming for interaction latency under **1 second**.
+- Gated **3 high-risk action classes** behind spoken confirmation before execution — destructive shell commands, payments, and sensitive text entry — and scanned for **4 PII types**, including SSNs and card numbers, before the assistant typed into apps.
+- Scoped pending approvals to the active session and expired them after **2 minutes**, so a stale "yes" can never execute the wrong action later in a long voice conversation.
+- Indexed routing events and **4 confirmation outcomes** (`confirm_required`, `resumed`, `cancelled`, `reask`) in Elasticsearch, exposing the latest **50** records through `/api/audit/:sessionId` for auditability.
+- Built **3 runtime surfaces** — Electron desktop app, Next.js web client, and a Node.js Socket.io server — to coordinate real-time voice, agent routing, and local automation.
+- Separated **2 automation paths**: Stagehand for browser control, and macOS AppleScript/JXA for desktop control, because browser and desktop automation fail in different ways.
+- Covered **4 critical safety areas** with Vitest: the PII scanner, the ethics rules, the confirmation store, and supervisor confirmation routing.
 
 ---
 
 ## Architecture
 
-```
-Microphone → Deepgram STT → Socket.io → LangGraph Supervisor
-                                               ↓
-                          ┌─────────────────────────────────────┐
-                          │  Commerce · General · Coding        │
-                          │  Desktop · Documentation            │
-                          └─────────────────────────────────────┘
-                                               ↓
-                               Cartesia TTS → Speaker
+```mermaid
+flowchart LR
+    MIC["Microphone"] --> STT["Deepgram nova-3<br/>streaming STT"]
+    STT --> SUP["LangGraph Supervisor<br/>intent routing"]
+
+    SUP --> CM["Commerce Agent"]
+    SUP --> GEN["General Agent"]
+    SUP --> COD["Coding Agent"]
+    SUP --> DSK["Desktop Agent"]
+    SUP --> DOC["Documentation Agent"]
+
+    CM --> GATE{"Safety Gate"}
+    COD --> GATE
+    DSK --> GATE
+    DOC --> GATE
+    GEN --> TTS
+
+    GATE -->|"low risk"| EXEC["Execution layer"]
+    GATE -->|"high risk"| ASK["Spoken confirmation<br/>2-minute expiry"]
+    ASK --> EXEC
+
+    EXEC --> WEB["Stagehand<br/>browser automation"]
+    EXEC --> MAC["AppleScript / JXA<br/>macOS automation"]
+    EXEC --> AUD["Elasticsearch<br/>audit index"]
+
+    EXEC --> TTS["Cartesia<br/>streaming TTS"]
+    TTS --> SPK["Speaker"]
 ```
 
-- **Frontend**: Electron desktop app (React + Vite) with a glassmorphism UI, and a Next.js web client
-- **Backend**: Node.js + Express + Socket.io server
-- **STT**: Deepgram nova-3 (real-time streaming)
-- **TTS**: Cartesia (WebSocket streaming, low latency)
-- **LLM**: OpenAI / Runware Gemini proxy / Anthropic Claude / Ollama (local classifier) — configurable via env vars
-- **Agent orchestration**: LangGraph + LangChain
-- **Browser automation**: Stagehand
-- **Desktop control**: macOS AppleScript + JXA (for the Desktop & Documentation agents)
-- **Memory / Knowledge base**: Elasticsearch (user profiles, browsing history, past interactions, agent action audit logs)
-- **AgentVerse**: Python adapter to register Aria as a uAgents-compatible agent
+## Request lifecycle
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant S as Deepgram STT
+    participant G as LangGraph Supervisor
+    participant A as Specialized Agent
+    participant P as PII + Ethics Gate
+    participant E as Executor
+    participant T as Cartesia TTS
+
+    U->>S: speaks
+    S-->>G: partial transcript stream
+    G->>A: route to 1 of 5 agents
+    A->>P: proposed action
+    alt high-risk class
+        P-->>T: "Confirm before I continue?"
+        T-->>U: spoken question
+        U->>P: "yes" (valid 2 minutes)
+    end
+    P->>E: approved action
+    E->>E: index outcome in Elasticsearch
+    E-->>T: result text
+    T-->>U: streamed speech (under 1s)
+```
 
 ---
 
-## Project Structure
+## The five agents
 
-```
-aria/
-├── server/          # Node.js backend (Express, Socket.io, all agents)
-├── client/          # Next.js web frontend
-├── electron/        # Electron desktop app
-├── visualizer/      # Audio visualizer component
-├── agentverse/      # Python uAgents adapter
-└── docs/            # Architecture documentation
-```
+| Agent | What it does |
+|---|---|
+| **Commerce** | Browses, searches products, compares prices and ratings, can add to cart and check out |
+| **General** | Navigates any website, reads and summarizes articles, answers factual questions |
+| **Coding** | Reads, writes and edits files, runs shell commands, debugs errors, searches the codebase |
+| **Desktop** | Controls macOS via screenshots plus mouse and keyboard — opens apps, clicks, navigates UIs |
+| **Documentation** | Dictates and files notes, including Apple Notes |
 
----
+## Safety model
 
-## Getting Started
+| Control | Scope |
+|---|---|
+| Spoken confirmation gate | Destructive shell commands, payments/checkout, sensitive text entry |
+| PII scanner | SSNs, credit card numbers, emails, phone numbers — checked before any typing |
+| Approval expiry | Pending approvals scoped to the session, expire after 2 minutes |
+| Audit trail | Routing + `confirm_required` / `resumed` / `cancelled` / `reask` indexed in Elasticsearch |
 
-### Prerequisites
+## Tech stack
 
-- Node.js 18+
-- Python 3.10+ (for AgentVerse adapter)
-- macOS (Desktop and Documentation agents require macOS)
+**Voice** Deepgram nova-3 STT · Cartesia WebSocket TTS
+**Agents** LangGraph · LangChain · Anthropic Claude · OpenAI · Ollama
+**Automation** Stagehand (web) · AppleScript / JXA (macOS)
+**Runtime** Electron · React · Vite · Next.js · Node.js · Express · Socket.io
+**Observability** Elasticsearch audit index · Vitest
 
-### Environment Variables
-
-Create `server/.env`:
-
-```env
-# LLM — at least one required
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-RUNWARE_API_KEY=        # optional: Gemini Flash via Runware-compatible OpenAI endpoint
-OLLAMA_MODEL=           # optional: local model name (e.g. llama3)
-OPENAI_MODEL=           # optional: defaults to gpt-4.1 for tool-using agents
-OPENAI_TEMPERATURE=     # optional
-
-# Voice
-DEEPGRAM_API_KEY=
-CARTESIA_API_KEY=
-CARTESIA_VOICE_ID=
-
-# Knowledge base (optional)
-ELASTIC_CLOUD_ID=
-ELASTIC_API_KEY=
-
-# Dev
-PORT=3001
-TEST=false              # set to true to skip Stagehand + Elasticsearch init
-```
-
-### Install & Run
+## Getting started
 
 ```bash
-# Server
-cd server && npm install && npm run dev
-
-# Server tests
-cd server && npm test
-
-# Web client
-cd client && npm install && npm run dev
-
-# Electron desktop app
-cd electron && npm install && npm run dev
-
-# Audio visualizer
-cd visualizer && npm run dev:electron
-
-# AgentVerse adapter (Python)
-cd agentverse && pip install -r requirements.txt && python register.py
+git clone https://github.com/Brijesh03032001/Aria.git
+cd Aria
+npm install
+cp .env.example .env     # DEEPGRAM_API_KEY, CARTESIA_API_KEY, ANTHROPIC_API_KEY
+npm run dev              # Socket.io server + Electron app
 ```
-
----
-
-## Key Features
-
-- **Real-time voice**: Streaming STT + TTS with interim results so the assistant feels instant
-- **Multi-agent routing**: LangGraph supervisor classifies intent and picks the right agent — no manual switching
-- **Spoken safety confirmations**: Risky actions pause for a clear yes/no before continuing
-- **PII-aware typing gate**: SSNs, credit card numbers, emails, and phone numbers are detected before agents type sensitive text
-- **Agent action audit logs**: Routing decisions and confirmation outcomes are indexed in Elasticsearch and exposed through `/api/audit/:sessionId`
-- **Browser control**: Stagehand-powered browser for real shopping, real navigation, real actions
-- **Computer use**: Anthropic's computer-use model lets Aria take screenshots and control any macOS app
-- **Persistent memory**: Elasticsearch stores user profiles, shopping history, and conversation context
-- **Accessibility-first**: Every agent's prompts are tuned for voice output — no markdown, no lists, natural spoken language
-- **Graceful degradation**: Works without Elasticsearch or Stagehand if those services are unavailable
-
----
-
-## Safety & Audit Flow
-
-Aria's tool layer checks proposed actions before they execute:
-
-- **Coding**: destructive shell commands such as force pushes, hard resets, broad deletes, shutdowns, and similar commands require confirmation
-- **Commerce / Browser**: checkout and purchase actions require confirmation, with an extra warning when a purchase exceeds the known budget
-- **Desktop / Documentation**: typing likely sensitive information requires confirmation before text is entered into macOS apps
-
-Pending confirmations are session-scoped and expire after two minutes. When Elasticsearch is configured, Aria writes routing events plus `confirm_required`, `resumed`, `cancelled`, and `reask` outcomes to the `agent-actions` index. You can inspect recent entries with:
 
 ```bash
-curl "http://localhost:3001/api/audit/<sessionId>?limit=50"
-```
-
-Run the Elasticsearch setup script after configuring Elastic credentials to create the audit index alongside the existing knowledge-base indices:
-
-```bash
-cd server && npx tsx scripts/setup-elastic.ts
+npm run test             # Vitest: PII scanner, ethics rules, confirmation routing
 ```
 
 ---
 
-## Testing
-
-The server uses Vitest for deterministic unit coverage around the PII scanner, ethics rules, confirmation store, and supervisor confirmation routing.
-
-```bash
-cd server
-npm test
-```
-
----
-
-## Tech Stack
-
-**Frontend**: React, TypeScript, Vite, Electron, Next.js, Tailwind CSS  
-**Backend**: Node.js, TypeScript, Express, Socket.io  
-**AI**: OpenAI, Anthropic Claude, Runware Gemini proxy, Ollama, LangGraph, LangChain  
-**Voice**: Deepgram (STT), Cartesia (TTS)  
-**Automation**: Stagehand, AppleScript, JXA  
-**Data**: Elasticsearch  
-**Testing**: Vitest  
-**Other**: Python, uAgents (Fetch.ai AgentVerse)
+**Built by [Brijesh Kumar](https://github.com/Brijesh03032001)** · [Portfolio](https://brijeshbuilds.com) · [LinkedIn](https://linkedin.com/in/brijeshkumar03)
