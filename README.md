@@ -14,6 +14,15 @@
 
 ---
 
+## The hard part
+
+Aria's users are blind. Voice is the only interface — which also means every safety net that normally
+comes from *seeing* what is about to happen is gone. The agent can run shell commands, type into apps
+and check out a cart, so the question is never "can it do this?" but "how does someone stay in control
+of an action they cannot see?"
+
+---
+
 ## Highlights
 
 - Orchestrated **5 specialized agents** for shopping, coding, browsing, desktop control, and notes through a **LangGraph supervisor** in a full-duplex Electron voice assistant, combining Deepgram transcription and Cartesia speech streaming for interaction latency under **1 second**.
@@ -23,6 +32,20 @@
 - Built **3 runtime surfaces** — Electron desktop app, Next.js web client, and a Node.js Socket.io server — to coordinate real-time voice, agent routing, and local automation.
 - Separated **2 automation paths**: Stagehand for browser control, and macOS AppleScript/JXA for desktop control, because browser and desktop automation fail in different ways.
 - Covered **4 critical safety areas** with Vitest: the PII scanner, the ethics rules, the confirmation store, and supervisor confirmation routing.
+
+---
+
+## Agent design
+
+| Layer | How it works here |
+|---|---|
+| **Orchestration** | A **LangGraph supervisor** routes each utterance to one of 5 narrow agents — commerce, general, coding, desktop, documentation — instead of one prompt that tries to do everything |
+| **Tool interfaces** | Two separate automation paths, because they fail differently: Stagehand drives the browser, AppleScript and JXA drive macOS |
+| **Latency** | Deepgram nova-3 streaming transcription and Cartesia WebSocket speech, full duplex, holding interaction under 1 second |
+| **Guardrails** | 3 high-risk classes — destructive shell commands, payments, sensitive text entry — pause for spoken confirmation, and a PII gate screens 4 data types before anything is typed |
+| **Approval scope** | Pending approvals are scoped to the session and expire after 2 minutes, so a stale "yes" cannot execute something later |
+| **When it breaks** | Routing events and 4 confirmation outcomes (`confirm_required`, `resumed`, `cancelled`, `reask`) are indexed in Elasticsearch, with the latest 50 exposed at `/api/audit/:sessionId` |
+| **Tested** | Vitest over the 4 areas that actually matter: the PII scanner, the ethics rules, the confirmation store, and supervisor confirmation routing |
 
 ---
 
@@ -126,6 +149,19 @@ npm run dev              # Socket.io server + Electron app
 ```bash
 npm run test             # Vitest: PII scanner, ethics rules, confirmation routing
 ```
+
+---
+
+## 🧩 Part of a series on agents that take actions
+
+|  |  |
+|---|---|
+| [**SlackAgent**](https://github.com/Brijesh03032001/SlackAgent) | 59 tools across 3 apps through one MCP client |
+| [**Aria**](https://github.com/Brijesh03032001/Aria) | 5 agents behind a LangGraph supervisor, gated on spoken confirmation  ←  **you are here** |
+| [**FoodPilot AI**](https://github.com/Brijesh03032001/foodai) | A ReAct copilot plus a validator the LLM cannot talk past |
+| [**TrustMed-AI**](https://github.com/Brijesh03032001/TrustmedAi) | Retrieval you can audit, with an evaluation suite behind it |
+
+How I build these, end to end → **[github.com/Brijesh03032001](https://github.com/Brijesh03032001)**
 
 ---
 
