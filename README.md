@@ -4,11 +4,13 @@
 
 > An accessibility-first voice AI built for blind and visually impaired users. You speak; Aria reasons about what you need and acts — browsing the web, controlling your Mac, writing code, or taking notes — in one continuous spoken conversation.
 
-[![Electron](https://img.shields.io/badge/Electron-desktop-47848F?logo=electron&logoColor=white)](https://electronjs.org)
-[![LangGraph](https://img.shields.io/badge/LangGraph-supervisor-FF6F00)](https://langchain-ai.github.io/langgraph/)
-[![Deepgram](https://img.shields.io/badge/Deepgram-nova--3%20STT-13EF93?logo=deepgram&logoColor=black)](https://deepgram.com)
-[![Cartesia](https://img.shields.io/badge/Cartesia-streaming%20TTS-7C3AED)](https://cartesia.ai)
-[![Anthropic](https://img.shields.io/badge/Anthropic-Claude-D97757?logo=anthropic&logoColor=white)](https://anthropic.com)
+[![Electron](https://img.shields.io/badge/Electron-2B2E3A?style=for-the-badge&logo=electron&logoColor=white)](https://electronjs.org)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge&logo=langgraph&logoColor=white)](https://langchain-ai.github.io/langgraph/)
+[![Deepgram](https://img.shields.io/badge/Deepgram-0A5F46?style=for-the-badge&logo=deepgram&logoColor=white)](https://deepgram.com)
+[![Cartesia TTS](https://img.shields.io/badge/Cartesia_TTS-5B21B6?style=for-the-badge)](https://cartesia.ai)
+[![Claude](https://img.shields.io/badge/Claude-D97757?style=for-the-badge&logo=anthropic&logoColor=white)](https://anthropic.com)
+[![Elasticsearch](https://img.shields.io/badge/Elasticsearch-005571?style=for-the-badge&logo=elasticsearch&logoColor=white)](https://elastic.co)
+[![Vitest](https://img.shields.io/badge/Vitest-4A7C1B?style=for-the-badge&logo=vitest&logoColor=white)](https://vitest.dev)
 
 ---
 
